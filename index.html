@@ -110,7 +110,7 @@
   <svg class="crown"><use href="#crown"/></svg>
   <div class="logo">JT<b>-TV</b></div>
   <div class="sub">PAISA ROLEPLAY</div>
-  <div class="hint">Usa el control remoto para elegir un canal</div>
+  <div class="hint" id="hint">Usa el control remoto para elegir un canal</div>
 </div>
 
 <div id="title"><svg><use href="#crown"/></svg><span id="titleText"></span></div>
@@ -133,18 +133,33 @@
 
   var player = null;
   var ready = false;
-  var want = null;                 // último estado pedido
+  var want = null;                 // último estado pedido por el juego
   var cur = { type: null, id: null };
-  var target = { playing: true, pos: 0 };
+  var target = { playing: true, pos: 0, at: 0 };   // última orden: dónde debería ir el video y cuándo se recibió
+  var lastRev = null;              // revisión del servidor: solo cambia cuando cambia el CONTENIDO (no el volumen)
+  var needAlign = false;           // alinear con el servidor cuando el video realmente arranque
+  var ended = false;
   var live = false;
   var volNow = 0;
   var lastBase = null, lastMuted = null;
   var lastTitle = '';
+  var lastSoftSeek = 0;
   var titleTimer = null, volTimer = null;
 
-  var $ = function (id) { return document.getElementById(id); };
+  var HINTS = {
+    splash: 'Usa el control remoto para elegir un canal',
+    ended: 'Fin del video · Elige otro con el control remoto'
+  };
 
-  function setMode(m) { document.body.setAttribute('data-mode', m); }
+  var $ = function (id) { return document.getElementById(id); };
+  function now() { return (window.performance && performance.now) ? performance.now() : Date.now(); }
+
+  function setMode(m) {
+    // el fin del video reutiliza la pantalla de logo, con otro mensaje
+    document.body.setAttribute('data-mode', m === 'ended' ? 'splash' : m);
+    var h = $('hint');
+    if (h) h.textContent = HINTS[m] || HINTS.splash;
+  }
 
   function showErr(msg) {
     $('errMsg').textContent = msg;
@@ -169,10 +184,18 @@
     volTimer = setTimeout(function () { el.classList.remove('show'); }, 1800);
   }
 
+  // Dónde debería ir el video ahora mismo según el servidor
+  function expectedPos() {
+    return target.pos + (target.playing ? (now() - target.at) / 1000 : 0);
+  }
+
   function stopVideo() {
     if (ready) { try { player.stopVideo(); } catch (e) {} }
     cur = { type: null, id: null };
     lastTitle = '';
+    lastRev = null;
+    needAlign = false;
+    ended = false;
     $('title').classList.remove('show');
   }
 
@@ -187,39 +210,80 @@
     } catch (e) { showErr('No se pudo cargar el video.'); }
   }
 
-  function sync(st) {
+  // Cambió el CONTENIDO (pausa, continuar, adelantar, mismo link otra vez): se obedece exacto.
+  function hardSync(st) {
     var ps;
     try { ps = player.getPlayerState(); } catch (e) { return; }
+    var isVideo = st.mediaType === 'video';
+    var exp = expectedPos();
+
     if (st.playing) {
+      if (ps === 0) {
+        // Terminó. Solo revive si la posición del servidor volvió a caer dentro del video
+        // (alguien retrocedió o lo puso desde el inicio). Si no, se queda en "fin".
+        var dur = 0;
+        try { dur = player.getDuration() || 0; } catch (e) {}
+        if (isVideo && dur && exp < dur - 2) {
+          ended = false; setMode('video'); hideErr();
+          try { player.seekTo(exp, true); player.playVideo(); } catch (e) {}
+        }
+        return;
+      }
       if (ps !== 1 && ps !== 3) { try { player.playVideo(); } catch (e) {} }
+      if (isVideo && !live) {
+        try { if (Math.abs(player.getCurrentTime() - exp) > 1.5) player.seekTo(exp, true); } catch (e) {}
+      }
     } else {
-      if (ps === 1 || ps === 3) { try { player.pauseVideo(); } catch (e) {} }
-    }
-    if (!live && st.mediaType === 'video') {
       try {
-        var drift = Math.abs(player.getCurrentTime() - (st.pos || 0));
-        if (drift > 3) player.seekTo(st.pos || 0, true);
+        if (isVideo && !live && ps !== 0) player.seekTo(st.pos || 0, true);
+        if (ps === 1 || ps === 3) player.pauseVideo();
       } catch (e) {}
     }
+  }
+
+  // Misma revisión (por ejemplo la corrección periódica): nunca pausa, ni reproduce, ni reinicia.
+  // Solo acerca el video al servidor si se desfasó MUCHO, y como máximo una vez cada 20 s.
+  function softSync(st) {
+    if (!st.playing || live || st.mediaType !== 'video') return;
+    var ps;
+    try { ps = player.getPlayerState(); } catch (e) { return; }
+    if (ps !== 1) return;
+    try {
+      var exp = expectedPos();
+      if (Math.abs(player.getCurrentTime() - exp) > 8 && now() - lastSoftSeek > 20000) {
+        lastSoftSeek = now();
+        player.seekTo(exp, true);
+      }
+    } catch (e) {}
   }
 
   function applyState(st) {
     want = st;
     if (!st.power) { stopVideo(); setMode('black'); hideErr(); return; }
     if (!st.mediaId) { stopVideo(); setMode('splash'); hideErr(); return; }
-    setMode('video');
+    if (!ended) setMode('video');
     if (!ready) return;
 
-    target = { playing: !!st.playing, pos: st.pos || 0 };
+    target = { playing: !!st.playing, pos: st.pos || 0, at: now() };
+
     var same = cur.id === st.mediaId && cur.type === st.mediaType;
     if (!same) {
       cur = { type: st.mediaType, id: st.mediaId };
       live = false;
+      ended = false;
+      lastRev = st.rev;
+      needAlign = true;
+      setMode('video');
       hideErr();
       load(st);
       return;
     }
-    sync(st);
+    if (st.rev !== lastRev) {
+      lastRev = st.rev;
+      hardSync(st);
+    } else {
+      softSync(st);
+    }
   }
 
   function applyVolume(d) {
@@ -240,14 +304,30 @@
   function onStateChange(e) {
     if (e.data === 1) {                                   // PLAYING
       try { live = !!((player.getVideoData() || {}).isLive); } catch (x) {}
+      ended = false;
+
+      // El video tarda en arrancar tras cargarlo; mientras tanto el servidor siguió contando.
+      // Al arrancar se salta a donde "debería" ir, así todos los jugadores ven lo mismo.
+      if (needAlign) {
+        needAlign = false;
+        if (cur.type === 'video' && !live) {
+          try {
+            var exp = target.playing ? expectedPos() : target.pos;
+            if (Math.abs(player.getCurrentTime() - exp) > 1.5) player.seekTo(exp, true);
+          } catch (x) {}
+        }
+      }
       if (!target.playing) { try { player.pauseVideo(); } catch (x) {} }
+
       try {
         var t = (player.getVideoData() || {}).title;
         if (t && t !== lastTitle) { lastTitle = t; showTitle(t); }
       } catch (x) {}
       hideErr();
     } else if (e.data === 0 && cur.type === 'video') {    // ENDED
-      showErr('El video terminó. Elige otro canal con el control.');
+      ended = true;
+      hideErr();
+      setMode('ended');
     }
   }
 
@@ -278,7 +358,10 @@
     if (!d || !d.action) return;
     if (d.action === 'state') applyState(d);
     else if (d.action === 'volume') applyVolume(d);
-    else if (d.action === 'stop') { want = null; stopVideo(); setMode('black'); hideErr(); }
+    else if (d.action === 'stop') {
+      want = null; stopVideo(); setMode('black'); hideErr();
+      lastBase = null; lastMuted = null;
+    }
   });
 
   // Modo prueba: abre la página en el navegador con ?preview=1 para comprobar que quedó publicada
