@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<title>JT-TV Screen</title>
+<style>
+  :root {
+    --red: #e10a1a;
+    --red2: #ff2b2b;
+    --ink: #07070a;
+    --chrome: linear-gradient(180deg, #ffffff 0%, #c9ccd2 42%, #6f737b 54%, #eceef1 100%);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: 'Impact', 'Haettenschweiler', 'Arial Black', sans-serif; }
+  body { position: relative; color: #fff; }
+
+  /* --- video --- */
+  #stage { position: absolute; inset: 0; background: #000; }
+  #yt, #stage iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+
+  /* --- capas por modo --- */
+  #black, #splash { position: absolute; inset: 0; display: none; }
+  body[data-mode="black"] #black { display: block; background: #000; }
+  body[data-mode="black"] #stage { visibility: hidden; }
+  body[data-mode="splash"] #splash { display: flex; }
+  body[data-mode="splash"] #stage { visibility: hidden; }
+
+  /* --- splash --- */
+  #splash {
+    align-items: center; justify-content: center; flex-direction: column;
+    background:
+      radial-gradient(70% 60% at 50% 38%, rgba(225, 10, 26, .38), transparent 70%),
+      radial-gradient(120% 100% at 50% 120%, rgba(225, 10, 26, .22), transparent 60%),
+      linear-gradient(180deg, #0c0c0f, #020203);
+    overflow: hidden;
+  }
+  #splash::before {
+    content: ''; position: absolute; inset: 0;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 2px, transparent 2px 5px);
+    animation: scan 7s linear infinite; pointer-events: none;
+  }
+  @keyframes scan { from { background-position: 0 0; } to { background-position: 0 100px; } }
+  @keyframes pulse { 0%, 100% { filter: drop-shadow(0 0 14px rgba(225,10,26,.75)); } 50% { filter: drop-shadow(0 0 34px rgba(255,43,43,1)); } }
+  #splash .crown { width: 22vh; height: 16.3vh; color: var(--red); animation: pulse 2.6s ease-in-out infinite; }
+  #splash .logo {
+    margin-top: 2.2vh; font-size: 17vh; line-height: 1; font-style: italic; letter-spacing: .02em;
+    transform: skewX(-8deg); padding: 0 2vh;
+    background: var(--chrome); -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 .5vh 0 #7a0710) drop-shadow(0 0 2.4vh rgba(225,10,26,.65));
+  }
+  #splash .logo b { color: transparent; background: linear-gradient(180deg, #ff5a5a, #e10a1a 55%, #8d0510); -webkit-background-clip: text; background-clip: text; }
+  #splash .sub { margin-top: 1.2vh; font-size: 3.6vh; letter-spacing: .5em; color: #d7d9dd; text-indent: .5em; }
+  #splash .hint { position: absolute; bottom: 5vh; font-family: 'Segoe UI', Arial, sans-serif; font-size: 2.6vh; color: rgba(255,255,255,.62); letter-spacing: .08em; }
+
+  /* --- OSD --- */
+  #title {
+    position: absolute; left: 3vh; top: 3vh; max-width: 70%;
+    display: flex; align-items: center; gap: 1.6vh; padding: 1.2vh 2.4vh 1.2vh 1.6vh;
+    background: linear-gradient(90deg, rgba(8,8,10,.88), rgba(8,8,10,.55));
+    border-left: .6vh solid var(--red); border-radius: .8vh;
+    opacity: 0; transform: translateX(-3vh); transition: opacity .35s, transform .35s;
+    font-family: 'Segoe UI', Arial, sans-serif; font-size: 3vh; font-weight: 600;
+    text-shadow: 0 0 1vh #000;
+  }
+  #title.show { opacity: 1; transform: none; }
+  #title svg { width: 5vh; height: 3.7vh; color: var(--red); flex: none; filter: drop-shadow(0 0 .8vh rgba(225,10,26,.9)); }
+  #title span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  #vol {
+    position: absolute; left: 50%; bottom: 6vh; transform: translateX(-50%) translateY(2vh);
+    width: 46vh; padding: 1.6vh 2.4vh; border-radius: 1.2vh;
+    background: rgba(8,8,10,.86); border: 1px solid rgba(225,10,26,.65);
+    box-shadow: 0 0 3vh rgba(225,10,26,.35);
+    opacity: 0; transition: opacity .25s, transform .25s;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+  #vol.show { opacity: 1; transform: translateX(-50%); }
+  #vol .row { display: flex; justify-content: space-between; font-size: 2.6vh; font-weight: 600; margin-bottom: 1vh; }
+  #vol .bar { height: 1.1vh; border-radius: 1vh; background: #26262b; overflow: hidden; }
+  #vol .fill { height: 100%; width: 0; background: linear-gradient(90deg, #8d0510, #ff2b2b); transition: width .15s; }
+
+  #err {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center; flex-direction: column;
+    background: rgba(0,0,0,.88); text-align: center; padding: 6vh;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+  #err.show { display: flex; }
+  #err svg { width: 12vh; height: 9vh; color: var(--red); margin-bottom: 2vh; }
+  #err .t { font-family: 'Impact', 'Arial Black', sans-serif; font-style: italic; font-size: 5vh; color: #fff; }
+  #err .m { margin-top: 1.4vh; font-size: 2.6vh; color: #cfd1d6; max-width: 80%; }
+</style>
+</head>
+<body data-mode="black">
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="crown" viewBox="0 0 100 76">
+    <path d="M12 60 L5 22 L31 43 L50 8 L69 43 L95 22 L88 60 Z" fill="#0b0b0d" stroke="currentColor" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M13 66 H87 V73 H13 Z" fill="currentColor"/>
+    <circle cx="5" cy="19" r="5.2" fill="currentColor"/>
+    <circle cx="50" cy="5.5" r="5.2" fill="currentColor"/>
+    <circle cx="95" cy="19" r="5.2" fill="currentColor"/>
+  </symbol>
+</svg>
+
+<div id="stage"><div id="yt"></div></div>
+<div id="black"></div>
+
+<div id="splash">
+  <svg class="crown"><use href="#crown"/></svg>
+  <div class="logo">JT<b>-TV</b></div>
+  <div class="sub">PAISA ROLEPLAY</div>
+  <div class="hint">Usa el control remoto para elegir un canal</div>
+</div>
+
+<div id="title"><svg><use href="#crown"/></svg><span id="titleText"></span></div>
+
+<div id="vol">
+  <div class="row"><span>VOLUMEN</span><span id="volText">0%</span></div>
+  <div class="bar"><div class="fill" id="volFill"></div></div>
+</div>
+
+<div id="err">
+  <svg><use href="#crown"/></svg>
+  <div class="t">SIN SEÑAL</div>
+  <div class="m" id="errMsg"></div>
+</div>
+
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var HOST = params.get('host') || 'https://www.youtube.com';
+
+  var player = null;
+  var ready = false;
+  var want = null;                 // último estado pedido
+  var cur = { type: null, id: null };
+  var target = { playing: true, pos: 0 };
+  var live = false;
+  var volNow = 0;
+  var lastBase = null, lastMuted = null;
+  var lastTitle = '';
+  var titleTimer = null, volTimer = null;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function setMode(m) { document.body.setAttribute('data-mode', m); }
+
+  function showErr(msg) {
+    $('errMsg').textContent = msg;
+    $('err').classList.add('show');
+  }
+  function hideErr() { $('err').classList.remove('show'); }
+
+  function showTitle(t) {
+    $('titleText').textContent = t;
+    var el = $('title');
+    el.classList.add('show');
+    clearTimeout(titleTimer);
+    titleTimer = setTimeout(function () { el.classList.remove('show'); }, 5500);
+  }
+
+  function showVol(base, muted) {
+    $('volText').textContent = muted ? 'SILENCIO' : (base + '%');
+    $('volFill').style.width = (muted ? 0 : base) + '%';
+    var el = $('vol');
+    el.classList.add('show');
+    clearTimeout(volTimer);
+    volTimer = setTimeout(function () { el.classList.remove('show'); }, 1800);
+  }
+
+  function stopVideo() {
+    if (ready) { try { player.stopVideo(); } catch (e) {} }
+    cur = { type: null, id: null };
+    lastTitle = '';
+    $('title').classList.remove('show');
+  }
+
+  function load(st) {
+    var start = Math.max(0, Math.floor(st.pos || 0));
+    try {
+      if (st.mediaType === 'playlist') {
+        player.loadPlaylist({ listType: 'playlist', list: st.mediaId, index: 0 });
+      } else {
+        player.loadVideoById({ videoId: st.mediaId, startSeconds: start });
+      }
+    } catch (e) { showErr('No se pudo cargar el video.'); }
+  }
+
+  function sync(st) {
+    var ps;
+    try { ps = player.getPlayerState(); } catch (e) { return; }
+    if (st.playing) {
+      if (ps !== 1 && ps !== 3) { try { player.playVideo(); } catch (e) {} }
+    } else {
+      if (ps === 1 || ps === 3) { try { player.pauseVideo(); } catch (e) {} }
+    }
+    if (!live && st.mediaType === 'video') {
+      try {
+        var drift = Math.abs(player.getCurrentTime() - (st.pos || 0));
+        if (drift > 3) player.seekTo(st.pos || 0, true);
+      } catch (e) {}
+    }
+  }
+
+  function applyState(st) {
+    want = st;
+    if (!st.power) { stopVideo(); setMode('black'); hideErr(); return; }
+    if (!st.mediaId) { stopVideo(); setMode('splash'); hideErr(); return; }
+    setMode('video');
+    if (!ready) return;
+
+    target = { playing: !!st.playing, pos: st.pos || 0 };
+    var same = cur.id === st.mediaId && cur.type === st.mediaType;
+    if (!same) {
+      cur = { type: st.mediaType, id: st.mediaId };
+      live = false;
+      hideErr();
+      load(st);
+      return;
+    }
+    sync(st);
+  }
+
+  function applyVolume(d) {
+    volNow = d.v;
+    if (ready) { try { player.setVolume(Math.round(d.v * 100)); } catch (e) {} }
+    var changed = lastBase !== null && (d.base !== lastBase || d.muted !== lastMuted);
+    lastBase = d.base;
+    lastMuted = d.muted;
+    if (changed) showVol(d.base, d.muted);
+  }
+
+  function onReady() {
+    ready = true;
+    try { player.setVolume(Math.round(volNow * 100)); } catch (e) {}
+    if (want) applyState(want);
+  }
+
+  function onStateChange(e) {
+    if (e.data === 1) {                                   // PLAYING
+      try { live = !!((player.getVideoData() || {}).isLive); } catch (x) {}
+      if (!target.playing) { try { player.pauseVideo(); } catch (x) {} }
+      try {
+        var t = (player.getVideoData() || {}).title;
+        if (t && t !== lastTitle) { lastTitle = t; showTitle(t); }
+      } catch (x) {}
+      hideErr();
+    } else if (e.data === 0 && cur.type === 'video') {    // ENDED
+      showErr('El video terminó. Elige otro canal con el control.');
+    }
+  }
+
+  function onError(e) {
+    var c = e.data;
+    if (c === 101 || c === 150) showErr('Este video no permite reproducirse fuera de YouTube. Prueba con otro link.');
+    else if (c === 100) showErr('Video no disponible o privado.');
+    else if (c === 152 || c === 153) showErr('YouTube rechazó el reproductor (error ' + c + '). Revisa el README: Config.PlayerPage.');
+    else showErr('Error de reproducción (' + c + ').');
+  }
+
+  window.onYouTubeIframeAPIReady = function () {
+    player = new YT.Player('yt', {
+      host: HOST,
+      width: '100%',
+      height: '100%',
+      playerVars: {
+        autoplay: 1, controls: 0, disablekb: 1, fs: 0, modestbranding: 1, rel: 0,
+        iv_load_policy: 3, playsinline: 1, enablejsapi: 1, cc_load_policy: 0
+      },
+      events: { onReady: onReady, onStateChange: onStateChange, onError: onError }
+    });
+  };
+
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (typeof d === 'string') { try { d = JSON.parse(d); } catch (x) { return; } }
+    if (!d || !d.action) return;
+    if (d.action === 'state') applyState(d);
+    else if (d.action === 'volume') applyVolume(d);
+    else if (d.action === 'stop') { want = null; stopVideo(); setMode('black'); hideErr(); }
+  });
+
+  // Modo prueba: abre la página en el navegador con ?preview=1 para comprobar que quedó publicada
+  if (params.get('preview')) setMode('splash');
+
+  var tag = document.createElement('script');
+  tag.src = 'https://www.youtube.com/iframe_api';
+  tag.onerror = function () { showErr('No hay conexión con YouTube.'); };
+  document.head.appendChild(tag);
+})();
+</script>
+</body>
+</html>
